@@ -26,6 +26,7 @@ pragma solidity ^0.8.19;
 import {RomanStableCoin} from "./RomanStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title RSCEngine
@@ -53,12 +54,21 @@ contract RSCEngine is ReentrancyGuard {
     error RSCEngine__TokenAddressesAndPriceFeedAddressesArrayMustBeSameLength();
     error RSCEngine__TokenNotAllowedAsCollateral();
     error RSCEngine__TransferFailed();
+    error RSCEngine__BreaksHealthFactor(uint256 healthFactor);
 
     ////////////////////////////////////////////////
     // State Variables                             //
     ////////////////////////////////////////////////
+    uint256 private constant ADDITIONAL_PRICEFEED_PRECISION = 1e10;
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant LIQUIDATION_THRESHOLD = 50;
+    uint256 private constant LIQUIDATION_PRECISION = 100;
+    uint256 private constant MIN_HEALTH_FACTOR = 1;
+
     mapping(address token => address priceFeed) private s_priceFeed; //tokenTopriceFeed
     mapping(address user => mapping(address token => uint256 amount)) private s_collateralAmountDeposited;
+    mapping(address user => uint256 amountRSCminted) private s_RSCMinted;
+    address[] private s_collateralTokens;
 
     RomanStableCoin private immutable i_rsc;
 
@@ -94,6 +104,7 @@ contract RSCEngine is ReentrancyGuard {
 
         for (uint256 i = 0; i < tokenAddresses.length; i++) {
             s_priceFeed[tokenAddresses[i]] = priceFeedAddresses[i];
+            s_collateralTokens.push(tokenAddresses[i]);
         }
         i_rsc = RomanStableCoin(rscAddress);
     }
@@ -128,11 +139,78 @@ contract RSCEngine is ReentrancyGuard {
 
     function redeemCollateral() external {}
 
-    function mintRsc() external {}
+    /**
+     * @notice Follows CEI
+     * @param amountOfRscToMint The amount of RomanstableCoin to mint
+     * @notice They must have more collateral value than the minimu threshold
+     */
+    function mintRsc(uint256 amountOfRscToMint) external moreThanZero(amountOfRscToMint) nonReentrant {
+        s_RSCMinted[msg.sender] += amountOfRscToMint;
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function burnRsc() external {}
 
     function liquidate() external {}
 
     function getHealthFactor() external view {}
+
+    ////////////////////////////////////////////////
+    // Private & Internal View Functions           //
+    ////////////////////////////////////////////////
+
+    function _getAccountInformation(address user)
+        private
+        view
+        returns (uint256 totalRSCMinted, uint256 collateralValueInUSD)
+    {
+        totalRSCMinted = s_RSCMinted[user];
+        collateralValueInUSD = getAccountCollateralValue(user);
+    }
+
+    /**
+     * Returns how close to liquidation a user is
+     * @param user Address of user to view their health factor
+     * If a user goes below 1, they can get liquidated
+     */
+    function _healthFactor(address user) private view returns (uint256) {
+        //We need total rsc minted
+        //total collateral value value
+        (uint256 totalRSCMinted, uint256 collateralValueInUSD) = _getAccountInformation(user);
+        uint256 collateralAdjustedForThreshold = (collateralValueInUSD * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalRSCMinted;
+        // return (collateralValueInUSD / totalRSCMinted);
+    }
+
+    //1. Check health factor(Do they have enoughj collateral)
+    //2. Revert if they don't
+    function _revertIfHealthFactorIsBroken(address user) internal view {
+        uint256 userHealthFactor = _healthFactor(user);
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
+            revert RSCEngine__BreaksHealthFactor(userHealthFactor);
+        }
+    }
+
+    ////////////////////////////////////////////////
+    // Public & External View Functions           //
+    ////////////////////////////////////////////////
+    function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
+        //Loop through each collateral token, get the amount of collateral they have deposited, and map it to the price to get the USD value
+
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            address token = s_collateralTokens[i];
+            uint256 amount = s_collateralAmountDeposited[user][token];
+            totalCollateralValueInUsd += getUsdValue(token, amount);
+        }
+        return totalCollateralValueInUsd;
+    }
+
+    function getUsdValue(address token, uint256 amount) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeed[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        // If 1 eth = $1000
+        //The returned value from CL will be 1000 * 1e8
+        return ((uint256(price) * ADDITIONAL_PRICEFEED_PRECISION) * amount) / PRECISION;
+    }
 }
