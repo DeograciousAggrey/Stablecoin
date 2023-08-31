@@ -55,6 +55,7 @@ contract RSCEngine is ReentrancyGuard {
     error RSCEngine__TokenNotAllowedAsCollateral();
     error RSCEngine__TransferFailed();
     error RSCEngine__BreaksHealthFactor(uint256 healthFactor);
+    error RSCEngine__MintFailed();
 
     ////////////////////////////////////////////////
     // State Variables                             //
@@ -147,6 +148,10 @@ contract RSCEngine is ReentrancyGuard {
     function mintRsc(uint256 amountOfRscToMint) external moreThanZero(amountOfRscToMint) nonReentrant {
         s_RSCMinted[msg.sender] += amountOfRscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
+        bool minted = i_rsc.mint(msg.sender, amountOfRscToMint);
+        if (!minted) {
+            revert RSCEngine__MintFailed();
+        }
     }
 
     function burnRsc() external {}
