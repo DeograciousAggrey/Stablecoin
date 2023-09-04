@@ -11,7 +11,7 @@ contract DeployRSC is Script {
     address[] public tokenAddresses;
     address[] public priceFeedAddresses;
 
-    function run() external returns (RomanStableCoin, RSCEngine) {
+    function run() external returns (RomanStableCoin, RSCEngine, HelperConfig) {
         HelperConfig helperConfig = new HelperConfig();
 
         (address wethUsdPriceFeed, address wbtcUsdPriceFeed, address weth, address wbtc, uint256 deployerKey) =
@@ -28,6 +28,6 @@ contract DeployRSC is Script {
 
         vm.stopBroadcast();
 
-        return (rsc, rscEngine);
+        return (rsc, rscEngine, helperConfig);
     }
 }
