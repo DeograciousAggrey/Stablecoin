@@ -333,4 +333,12 @@ contract RSCEngine is ReentrancyGuard {
         //The returned value from CL will be 1000 * 1e8
         return ((uint256(price) * ADDITIONAL_PRICEFEED_PRECISION) * amount) / PRECISION;
     }
+
+    function getAccountInformation(address user)
+        external
+        view
+        returns (uint256 totalRSCMinted, uint256 collateralValueInUSD)
+    {
+        (totalRSCMinted, collateralValueInUSD) = _getAccountInformation(user);
+    }
 }
