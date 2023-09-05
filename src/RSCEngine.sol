@@ -56,6 +56,8 @@ contract RSCEngine is ReentrancyGuard {
     error RSCEngine__TransferFailed();
     error RSCEngine__BreaksHealthFactor(uint256 healthFactor);
     error RSCEngine__MintFailed();
+    error RSCEngine__HealthFactorOk();
+    error RSCEngine__HealthFactorNotImproved();
 
     ////////////////////////////////////////////////
     // State Variables                             //
@@ -64,7 +66,8 @@ contract RSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50;
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant LIQUIDATION_BONUS = 10;
 
     mapping(address token => address priceFeed) private s_priceFeed; //tokenTopriceFeed
     mapping(address user => mapping(address token => uint256 amount)) private s_collateralAmountDeposited;
@@ -77,6 +80,9 @@ contract RSCEngine is ReentrancyGuard {
     // Events                                     //
     ////////////////////////////////////////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
+    event CollateralRedeemed(
+        address indexed redeemedFrom, address indexed redeemedTo, address indexed token, uint256 amount
+    );
 
     ////////////////
     // Modifiers  //
@@ -114,7 +120,22 @@ contract RSCEngine is ReentrancyGuard {
     // External Functions                         //
     ////////////////////////////////////////////////
 
-    function depositCollateralAndMintRSC() external {}
+    /**
+     * @notice Follows CEI
+     * @param tokenCollateralAddress The address of the token to deposit as collateral
+     * @param amountCollateral The amount of collateral to deposit
+     * @param amountRSCToMint The amount of RomanstableCoin to mint
+     * @notice This function will deposit collateral and mint RSC in one transaction
+     */
+
+    function depositCollateralAndMintRSC(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountRSCToMint
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintRsc(amountRSCToMint);
+    }
 
     /**
      * @notice Follows CEI
@@ -122,7 +143,7 @@ contract RSCEngine is ReentrancyGuard {
      * @param amountCollateral The amount of collateral to deposit
      */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -135,17 +156,38 @@ contract RSCEngine is ReentrancyGuard {
             revert RSCEngine__TransferFailed();
         }
     }
+    /**
+     * @param tokenCollateralAddress The address of collateral to reddem
+     * @param amountCollateralToRedeem amount of collateral to redeem
+     * @param amountRSCToBurn Amount of minted RSC to burn
+     * This function burns RSC and redeem the underlying collateral in one tx
+     */
 
-    function redeemCollateralForRsc() external {}
+    function redeemCollateralForRsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateralToRedeem,
+        uint256 amountRSCToBurn
+    ) external {
+        burnRsc(amountRSCToBurn);
+        redeemCollateral(tokenCollateralAddress, amountCollateralToRedeem);
+    }
 
-    function redeemCollateral() external {}
+    // Inorder to redeem collateral, their health factor must be above 1 after collateral is removed
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+        public
+        moreThanZero(amountCollateral)
+        nonReentrant
+    {
+        _redeemCollateral(tokenCollateralAddress, amountCollateral, msg.sender, msg.sender);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice Follows CEI
      * @param amountOfRscToMint The amount of RomanstableCoin to mint
      * @notice They must have more collateral value than the minimu threshold
      */
-    function mintRsc(uint256 amountOfRscToMint) external moreThanZero(amountOfRscToMint) nonReentrant {
+    function mintRsc(uint256 amountOfRscToMint) public moreThanZero(amountOfRscToMint) nonReentrant {
         s_RSCMinted[msg.sender] += amountOfRscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
         bool minted = i_rsc.mint(msg.sender, amountOfRscToMint);
@@ -154,15 +196,81 @@ contract RSCEngine is ReentrancyGuard {
         }
     }
 
-    function burnRsc() external {}
+    function burnRsc(uint256 amount) public moreThanZero(amount) {
+        _burnRsc(amount, msg.sender, msg.sender);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
-    function liquidate() external {}
+    /**
+     * @param collateral The address of the erc20 collateral to liquidate from the user
+     * @param user The address of the user who has broken the health factor. Their _healthFactor must be below MIN_HEALTH_FACTOR
+     * @param debtToCover The amount of RSC you want to burn to improve the users health factor
+     * @notice You can partially liquidate a user
+     * @notice You will get a liquidation bonus for liquidating the  user
+     * @notice This function works on the assumption the protocol will be roughly 200% overcollateralized
+     * @notice A knowm bug would be if the protocol were 100% or less collateralized, then we wouldn't be able to incentivize the liquidators
+     * For example, if the price of the collateral plummeted before anyone could be liquidated
+     */
+    function liquidate(address collateral, address user, uint256 debtToCover) external moreThanZero(debtToCover) {
+        uint256 startingUserHealthFactor = _healthFactor(user);
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert RSCEngine__HealthFactorOk();
+        }
+        //We want to burn their RSC debt
+        //And take their collateral
+        // E.g Bad usedr: $140 ETH, $100 src
+        //debt to cover == $100
+        //$100 of rsc == ?? eth ?
+        uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+
+        //And give them a 10% bonus
+        //So we are giving a liquidator $110 WETH for 100 RSC
+        //We should implememnt a feature to liquidate in the event of insolvency
+        //And sweep extra amounts into a treasury
+        uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralToTake = tokenAmountFromDebtCovered + bonusCollateral;
+        _redeemCollateral(collateral, totalCollateralToTake, user, msg.sender);
+        //Burn the RSC
+        _burnRsc(debtToCover, user, msg.sender);
+
+        //Check the health factor, should have improved the health factor else revert with error health factor not improved
+        uint256 endingUserHealthFactor = _healthFactor(user);
+        if (endingUserHealthFactor < startingUserHealthFactor) {
+            revert RSCEngine__HealthFactorNotImproved();
+        }
+
+        //Revert if the health factor broken for liquidator
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function getHealthFactor() external view {}
 
     ////////////////////////////////////////////////
     // Private & Internal View Functions           //
     ////////////////////////////////////////////////
+    /**
+     * @dev Low level internal function, do not call unless the function calling it is checking the health factor being broken
+     */
+    function _burnRsc(uint256 amountRscToBurn, address onBehalfOf, address rscFrom) private {
+        s_RSCMinted[onBehalfOf] -= amountRscToBurn;
+        bool success = i_rsc.transferFrom(rscFrom, address(this), amountRscToBurn);
+        if (!success) {
+            revert RSCEngine__TransferFailed();
+        }
+        i_rsc.burn(amountRscToBurn);
+    }
+
+    function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral, address from, address to)
+        private
+    {
+        s_collateralAmountDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
+
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
+        if (!success) {
+            revert RSCEngine__TransferFailed();
+        }
+    }
 
     function _getAccountInformation(address user)
         private
@@ -199,6 +307,13 @@ contract RSCEngine is ReentrancyGuard {
     ////////////////////////////////////////////////
     // Public & External View Functions           //
     ////////////////////////////////////////////////
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeed[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_PRICEFEED_PRECISION);
+    }
+
     function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
         //Loop through each collateral token, get the amount of collateral they have deposited, and map it to the price to get the USD value
 
