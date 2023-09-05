@@ -341,4 +341,20 @@ contract RSCEngine is ReentrancyGuard {
     {
         (totalRSCMinted, collateralValueInUSD) = _getAccountInformation(user);
     }
+
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    function getCollateralTokePriceFeed(address token) external view returns (address) {
+        return s_priceFeed[token];
+    }
+
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+        return s_collateralAmountDeposited[user][token];
+    }
 }
