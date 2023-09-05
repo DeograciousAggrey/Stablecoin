@@ -13,12 +13,24 @@ contract RSCEngineTest is Test {
     RomanStableCoin rsc;
     RSCEngine rscEngine;
     HelperConfig helperConfig;
+    address ethUsdPriceFeed;
+    address weth;
 
     function setUp() public {
         deployer = new DeployRSC();
         (rsc, rscEngine, helperConfig) = deployer.run();
+        (ethUsdPriceFeed,, weth,,) = helperConfig.activeNetworkConfig();
     }
 
     ////////////////////////////////////////////////////
-    // Price tests
+    // Price tests                                   //
+    ////////////////////////////////////////////////////
+
+    function testGetUsdValue() public {
+        uint256 ethAmount = 15e18;
+        //15e18 * 2000/ ETH =30000e18;
+        uint256 expectedUsdValue = 30000e18;
+        uint256 actualUsdValue = rscEngine.getUsdValue(weth, ethAmount);
+        assertEq(actualUsdValue, expectedUsdValue);
+    }
 }
