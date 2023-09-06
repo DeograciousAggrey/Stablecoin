@@ -33,7 +33,10 @@ contract Handler is Test {
     function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
         //rscEngine.depositCollateral(collateral, amountCollateral);
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
-        amountCollateral = bound(amountCollateral, 1, MAX_DEPOSIT_SIZE);
+        amountCollateral = bound(amountCollateral, 0, MAX_DEPOSIT_SIZE);
+        if (amountCollateral == 0) {
+            return;
+        }
 
         vm.startPrank(msg.sender);
         collateral.mint(msg.sender, amountCollateral);
@@ -41,6 +44,16 @@ contract Handler is Test {
 
         rscEngine.depositCollateral(address(collateral), amountCollateral);
         vm.stopPrank();
+    }
+
+    function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
+        ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
+        uint256 maxCollateralToRedeem = rscEngine.getCollateralBalanceOfUser(address(collateral), msg.sender);
+        amountCollateral = bound(amountCollateral, 0, maxCollateralToRedeem);
+        if (amountCollateral == 0) {
+            return;
+        }
+        rscEngine.redeemCollateral(address(collateral), amountCollateral);
     }
 
     //Helper Functions
