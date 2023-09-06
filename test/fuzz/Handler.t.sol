@@ -9,6 +9,7 @@ import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {DeployRSC} from "../../script/DeployRSC.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
 
 contract Handler is Test {
     RSCEngine rscEngine;
@@ -16,6 +17,10 @@ contract Handler is Test {
 
     ERC20Mock weth;
     ERC20Mock wbtc;
+
+    uint256 public timesMintIsCalled;
+    address[] public usersWithCollateralDeposited;
+    MockV3Aggregator ethUsdPriceFeed;
 
     uint256 MAX_DEPOSIT_SIZE = type(uint96).max;
 
@@ -26,6 +31,34 @@ contract Handler is Test {
         address[] memory collateralTokens = rscEngine.getCollateralTokens();
         weth = ERC20Mock(collateralTokens[0]);
         wbtc = ERC20Mock(collateralTokens[1]);
+
+        ethUsdPriceFeed = MockV3Aggregator(rscEngine.getCollateralTokePriceFeed(address(weth)));
+    }
+
+    //Mint RSC
+    function mintRsc(uint256 amount, uint256 addressSeed) public {
+        if (usersWithCollateralDeposited.length == 0) {
+            return;
+        }
+        address sender = usersWithCollateralDeposited[addressSeed % usersWithCollateralDeposited.length];
+
+        (uint256 totalRSCMinted, uint256 collateralValueInUsd) = rscEngine.getAccountInformation(sender);
+        int256 maxRscToMint = (int256(collateralValueInUsd) / 2) - int256(totalRSCMinted);
+
+        if (maxRscToMint < 0) {
+            return;
+        }
+
+        amount = bound(amount, 0, uint256(maxRscToMint));
+        if (amount == 0) {
+            return;
+        }
+
+        vm.startPrank(sender);
+        rscEngine.mintRsc(amount);
+        vm.stopPrank();
+
+        timesMintIsCalled++;
     }
 
     //Deposit
@@ -43,6 +76,7 @@ contract Handler is Test {
 
         rscEngine.depositCollateral(address(collateral), amountCollateral);
         vm.stopPrank();
+        usersWithCollateralDeposited.push(msg.sender);
     }
 
     //Redeem Collateral
@@ -55,6 +89,11 @@ contract Handler is Test {
         }
         rscEngine.redeemCollateral(address(collateral), amountCollateral);
     }
+
+    // function updateCollateralPrice(uint96 newPrice) public {
+    //     int256 newPriceInt = int256(uint256(newPrice));
+    //     ethUsdPriceFeed.updateAnswer(newPriceInt);
+    // }
 
     //Helper Functions
     function _getCollateralFromSeed(uint256 collateralSeed) private view returns (ERC20Mock) {

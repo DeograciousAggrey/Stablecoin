@@ -46,6 +46,18 @@ contract InvariantsTest is StdInvariant, Test {
         uint256 wbtcValue = rscEngine.getUsdValue(wbtc, totalWbtcDeposited);
 
         uint256 totalValue = wethValue + wbtcValue;
+
+        console.log("totalValue: %s", totalValue);
+        console.log("wethValue: %s", wethValue);
+        console.log("wbtcValue: %s", wbtcValue);
+        console.log("totalSupply: %s", totalSupply);
+        console.log("Times mint() is called: %s", handler.timesMintIsCalled());
+
         assert(totalValue >= totalSupply);
+    }
+
+    function invariant_gettersShouldNotRevert() public view {
+        rscEngine.getLiquidationBonus();
+        rscEngine.getLiquidationThreshold();
     }
 }
