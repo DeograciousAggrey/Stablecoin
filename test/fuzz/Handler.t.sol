@@ -28,8 +28,7 @@ contract Handler is Test {
         wbtc = ERC20Mock(collateralTokens[1]);
     }
 
-    //Redeem Collateral
-
+    //Deposit
     function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
         //rscEngine.depositCollateral(collateral, amountCollateral);
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
@@ -46,6 +45,7 @@ contract Handler is Test {
         vm.stopPrank();
     }
 
+    //Redeem Collateral
     function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
         uint256 maxCollateralToRedeem = rscEngine.getCollateralBalanceOfUser(address(collateral), msg.sender);
